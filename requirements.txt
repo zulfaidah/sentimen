@@ -13,3 +13,4 @@ tqdm
 emoji
 utils
 scikit-learn
+streamlit_option_menu
