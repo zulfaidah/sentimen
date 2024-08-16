@@ -14,6 +14,6 @@ emoji
 utils
 scikit-learn
 streamlit_option_menu
-torch==2.0.0
-torchvision==0.15.1
-tqdm==4.64.1
+torch
+torchvision
+tqdm
