@@ -10,18 +10,16 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 import matplotlib.pyplot as plt
 import time
-from collections import defaultdict
-import torch
-from torch import optim
-from torch.cuda.amp import autocast, GradScaler
-from tqdm import tqdm
 
 #ANALISIS SENTIMEN
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import classification_report
 from collections import defaultdict
-
+import torch
+torch.cuda.empty_cache()
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+device
 # NLP
 import nltk
 nltk.download('punkt')
@@ -53,10 +51,7 @@ stopword_remover = stopword_factory.create_stop_word_remover()
 stemmer_factory = StemmerFactory()
 stemmer = stemmer_factory.create_stemmer()
 
-st.set_page_config(
-    page_title="Sentimen IndoBERT",
-    page_icon="wordcloud.png"  # replace with the path to your logo
-)
+
 
 st.markdown("""
         <style>
@@ -202,20 +197,13 @@ def Analisis_Sentimen(df):
     (i2w) # index to word
 
     # Tentukan optimizer
- 
-
-    # Tentukan optimizer
     optimizer = optim.Adam(model.parameters(), lr=3e-6)
     model = model.cuda()
 
-    # Initialize mixed precision training
-    scaler = GradScaler()
 
-    # Number of epochs
+    # Train
     n_epochs = 5
     history = defaultdict(list)
-
-    # Train loop
     for epoch in range(n_epochs):
         model.train()
         torch.set_grad_enabled(True)
@@ -224,39 +212,33 @@ def Analisis_Sentimen(df):
         list_hyp_train, list_label = [], []
 
         train_pbar = tqdm(train_loader, leave=True, total=len(train_loader))
-        optimizer.zero_grad()
-
         for i, batch_data in enumerate(train_pbar):
-            with autocast():
-                loss, batch_hyp, batch_label = forward_sequence_classification(model, batch_data[:-1], i2w=i2w, device='cuda')
+            # Forward model
+            loss, batch_hyp, batch_label = forward_sequence_classification(model, batch_data[:-1], i2w=i2w, device='cpu')
 
-            scaler.scale(loss).backward()
-
-            # Gradient accumulation step
-            if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_loader):
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
+            # Update model
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
             tr_loss = loss.item()
-            total_train_loss += tr_loss
+            total_train_loss = total_train_loss + tr_loss
 
-            # Collect predictions and labels for metrics calculation
+            # Hitung skor train metrics
             list_hyp_train += batch_hyp
             list_label += batch_label
 
-            train_pbar.set_description("(Epoch {}) TRAIN LOSS:{:.4f} LR:{:.8f}".format(
-                (epoch+1), total_train_loss/(i+1), get_lr(optimizer)))
+            train_pbar.set_description("(Epoch {}) TRAIN LOSS:{:.4f} LR:{:.8f}".format((epoch+1),
+                total_train_loss/(i+1), get_lr(optimizer)))
 
-        # Calculate train metrics
         metrics = document_sentiment_metrics_fn(list_hyp_train, list_label)
-        st.write("(Epoch {}) TRAIN LOSS:{:.4f} {} LR:{:.8f}".format(
-            (epoch+1), total_train_loss/(i+1), metrics_to_string(metrics), get_lr(optimizer)))
+        st.write("(Epoch {}) TRAIN LOSS:{:.4f} {} LR:{:.8f}".format((epoch+1),
+            total_train_loss/(i+1), metrics_to_string(metrics), get_lr(optimizer)))
 
-        # Save train accuracy for learning curve
+        # save train acc for learning curve
         history['train_acc'].append(metrics['ACC'])
 
-        # Validation
+        # Evaluate di validation set
         model.eval()
         torch.set_grad_enabled(False)
 
@@ -266,27 +248,24 @@ def Analisis_Sentimen(df):
         pbar = tqdm(valid_loader, leave=True, total=len(valid_loader))
         for i, batch_data in enumerate(pbar):
             batch_seq = batch_data[-1]
+            loss, batch_hyp, batch_label = forward_sequence_classification(model, batch_data[:-1], i2w=i2w, device='cpu')
 
-            with autocast():
-                loss, batch_hyp, batch_label = forward_sequence_classification(model, batch_data[:-1], i2w=i2w, device='cuda')
-
-            # Accumulate validation loss
+            # Hitung total loss
             valid_loss = loss.item()
-            total_loss += valid_loss
+            total_loss = total_loss + valid_loss
 
-            # Collect predictions and labels for metrics calculation
+            # Hitung skor evaluation metrics
             list_hyp += batch_hyp
             list_label += batch_label
             metrics = document_sentiment_metrics_fn(list_hyp, list_label)
 
             pbar.set_description("VALID LOSS:{:.4f} {}".format(total_loss/(i+1), metrics_to_string(metrics)))
 
-        # Calculate validation metrics
         metrics = document_sentiment_metrics_fn(list_hyp, list_label)
-        st.write("(Epoch {}) VALID LOSS:{:.4f} {}".format(
-            (epoch+1), total_loss/(i+1), metrics_to_string(metrics)))
+        st.write("(Epoch {}) VALID LOSS:{:.4f} {}".format((epoch+1),
+            total_loss/(i+1), metrics_to_string(metrics)))
 
-        # Save validation accuracy for learning curve
+        # save validation acc for learning curve
         history['val_acc'].append(metrics['ACC'])
 
     # Plot learning curve
